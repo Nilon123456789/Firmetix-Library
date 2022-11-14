@@ -1,5 +1,5 @@
 /*
-  Copyright (c) 2020-2021 Alan Yorinks All rights reserved.
+  Copyright (c) 2022 Nils Lahaye All rights reserved.
 
   This program is free software; you can redistribute it and/or
   modify it under the terms of the GNU AFFERO GENERAL PUBLIC LICENSE
@@ -68,9 +68,13 @@
 // Comment this out to save sketch space for the UNO
 #define I2C_ENABLED 1
 
+// This will allow Tone support to be compiled into the sketch.
+// Comment this out to save sketch space for the UNO
+#define TONE_ENABLED 1
+
 
 #include <Arduino.h>
-#include "Telemetrix4Arduino.h"
+#include "Firmetix4Arduino.h"
 
 #ifdef SERVO_ENABLED
 #include <Servo.h>
@@ -106,7 +110,7 @@
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
 // This value must be the same as specified when instantiating the
-// telemetrix client. The client defaults to a value of 1.
+// Firmetix client. The client defaults to a value of 1.
 // This value is used for the client to auto-discover and to
 // connect to a specific board regardless of the current com port
 // it is currently connected to.
@@ -178,6 +182,8 @@
 #define STEPPER_GET_DISTANCE_TO_GO 52
 #define STEPPER_GET_TARGET_POSITION 53
 #define GET_FEATURES 54
+#define TONE 55
+#define NO_TONE 56
 
 
 /* Command Forward References*/
@@ -297,6 +303,10 @@ extern void stepper_is_running();
 
 extern void get_features();
 
+extern void tone_play();
+
+extern void no_tone();
+
 // When adding a new command update the command_table.
 // The command length is the number of bytes that follow
 // the command byte itself, and does not include the command
@@ -370,6 +380,8 @@ command_descriptor command_table[] =
   {&stepper_get_distance_to_go},
   (&stepper_get_target_position),
   (&get_features),
+  (&tone_play),
+  (&no_tone),
 };
 
 
@@ -489,7 +501,7 @@ TwoWire *current_i2c_port;
 // INPUT defined in Arduino.h = 0
 // OUTPUT defined in Arduino.h = 1
 // INPUT_PULLUP defined in Arduino.h = 2
-// The following are defined for arduino_telemetrix (AT)
+// The following are defined for arduino_firmetix (AT)
 #define AT_ANALOG 3
 #define AT_MODE_NOT_SET 255
 
@@ -1074,6 +1086,31 @@ void sonar_new()
 }
 
 /***********************************
+   Tone functions
+**********************************/
+
+// play a tone on a pin
+void tone_play()
+{
+#ifdef TONE_ENABLED
+  // command_buffer[0] = pin,  command_buffer[1] = frequency most significant bit, command_buffer[2] = frequency least significant bit, command_buffer[3] = duration most significant bit, command_buffer[4] = duration least significant bit
+  unsigned int frequency = (command_buffer[1] << 8) + command_buffer[2];
+  unsigned int duration = (command_buffer[3] << 8) + command_buffer[4];
+  tone(command_buffer[0], frequency, duration);
+#endif
+}
+
+// noTone on a pin
+void no_tone()
+{
+#ifdef TONE_ENABLED
+  // command_buffer[0] = pin
+  noTone(command_buffer[0]);
+#endif
+}
+
+
+/***********************************
    DHT adding a new device
  **********************************/
 
@@ -1584,6 +1621,8 @@ void stepper_is_running() {
 #endif
 
 }
+
+
 
 // stop all reports from being generated
 

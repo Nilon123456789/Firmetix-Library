@@ -1,0 +1,6 @@
+{
+    "board": "arduino:avr:uno",
+    "programmer": "avrisp",
+    "port": "/dev/tty.usbmodem14101",
+    "sketch": "examples/Telemetrix4Arduino/Telemetrix4Arduino.ino"
+}
