@@ -184,6 +184,7 @@
 #define GET_FEATURES 54
 #define TONE 55
 #define NO_TONE 56
+#define GET_MAX_PINS = 57
 
 
 /* Command Forward References*/
@@ -307,6 +308,8 @@ extern void tone_play();
 
 extern void no_tone();
 
+extern void get_max_pins();
+
 // When adding a new command update the command_table.
 // The command length is the number of bytes that follow
 // the command byte itself, and does not include the command
@@ -382,6 +385,7 @@ command_descriptor command_table[] =
   (&get_features),
   (&tone_play),
   (&no_tone),
+  (&get_max_pins),
 };
 
 
@@ -418,6 +422,7 @@ byte command_buffer[MAX_COMMAND_LENGTH];
 #define STEPPER_RUN_COMPLETE_REPORT 19
 #define FEATURES 20
 #define DEBUG_PRINT 99
+#define MAX_PIN_REPORT 57
 
 #ifdef I2C_ENABLED
 // A buffer to hold i2c report data
@@ -445,9 +450,9 @@ bool stop_reports = false; // a flag to stop sending all report messages
 #define DHT_READ_ERROR 1
 
 // firmware version - update this when bumping the version
-#define FIRMWARE_MAJOR 5
-#define FIRMWARE_MINOR 1
-#define FIRMWARE_PATCH 1
+#define FIRMWARE_MAJOR 2
+#define FIRMWARE_MINOR 0
+#define FIRMWARE_PATCH 0
 
 
 
@@ -506,8 +511,8 @@ TwoWire *current_i2c_port;
 #define AT_MODE_NOT_SET 255
 
 // maximum number of pins supported
-#define MAX_DIGITAL_PINS_SUPPORTED 100
-#define MAX_ANALOG_PINS_SUPPORTED 15
+#define MAX_DIGITAL_PINS_SUPPORTED NUM_DIGITAL_PINS
+#define MAX_ANALOG_PINS_SUPPORTED NUM_ANALOG_INPUTS
 
 
 // Analog input pin numbers are defined from
@@ -835,6 +840,13 @@ void are_you_there()
 {
   byte report_message[3] = {2, I_AM_HERE, ARDUINO_ID};
   Serial.write(report_message, 3);
+}
+
+// Retrun the max number of pins supported
+void get_max_pins()
+{
+  byte report_message[4] = {3, MAX_PIN_REPORT, MAX_DIGITAL_PINS_SUPPORTED, MAX_ANALOG_PINS_SUPPORTED};
+  Serial.write(report_message, 4);
 }
 
 /***************************************************
