@@ -1768,7 +1768,7 @@ void init_pin_structures() {
 /*    Scanning Inputs, Generating Reports And Running Steppers      */
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
-boolean delay_done(int pool_time, long l_previous_millis) {
+boolean delay_done(unsigned int pool_time, unsigned long l_previous_millis) {
   // check if enough time has passed since last time depending on the pool time (in milliseconds)
   current_millis = millis();
   if (current_millis - l_previous_millis >= pool_time) {
@@ -1791,7 +1791,7 @@ void scan_digital_inputs()
   // byte 3 = value
   byte report_message[4] = {3, DIGITAL_REPORT, 0, 0};
   
-  if (!delay_done(&analog_sampling_interval, previous_millis))
+  if (!delay_done(analog_sampling_interval, previous_millis))
   {
     return;
   }
@@ -1993,7 +1993,7 @@ void scan_dhts()
     }
     
     float j, f;
-    float humidity = dhts[i].dht_sensor->getHumidity();
+    humidity = dhts[i].dht_sensor->getHumidity();
     if (humidity >= 0.0) {
       report_message[5] = 0;
     }
@@ -2002,7 +2002,7 @@ void scan_dhts()
     report_message[7] = (uint8_t)j;
     report_message[8] = (uint8_t)(f * 100);
 
-    float temperature = dhts[i].dht_sensor->getTemperature();
+    temperature = dhts[i].dht_sensor->getTemperature();
     if (temperature >= 0.0) {
       report_message[6] = 0;
     }
