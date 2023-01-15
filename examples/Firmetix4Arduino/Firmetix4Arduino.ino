@@ -396,6 +396,14 @@ command_descriptor command_table[] =
 // buffer to hold incoming command data
 byte command_buffer[MAX_COMMAND_LENGTH];
 
+// the current lenght of the expected packet
+byte packet_length = 0;
+// the current command index for the packet
+byte command = 255;
+// time of last command received used to detect timeouts
+unsigned long last_command_time = 0;
+unsigned int command_timeout = 1000;
+
 
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                 Reporting Defines and Support                    */
@@ -1633,7 +1641,6 @@ void stepper_is_running() {
 }
 
 
-
 // stop all reports from being generated
 
 void stop_all_reports()
@@ -1641,6 +1648,7 @@ void stop_all_reports()
   stop_reports = true;
   delay(20);
   Serial.flush();
+  reset_command_input();
 }
 
 // enable all reports to be generated
@@ -1649,54 +1657,93 @@ void enable_all_reports()
   Serial.flush();
   stop_reports = false;
   delay(20);
+  reset_command_input();
 }
 
 // retrieve the next command from the serial link
 void get_next_command()
 {
-  byte command;
-  byte packet_length;
-  command_descriptor command_entry;
 
-  // clear the command buffer
-  memset(command_buffer, 0, sizeof(command_buffer));
+  // if we have not received all packets in 1 second, then reset the packet length and command
+  if(delay_done(command_timeout, &last_command_time)) {
+    reset_command_input();
+  }
+
+  // if we already have received a packet, try to get the data, then return
+  if (packet_length > 1) {
+    get_command_buffer();
+    return;
+  }
 
   // if there is no command waiting, then return
-  if (not Serial.available())
+  if (Serial.available() < 2)
   {
     return;
   }
+
+  // we have received a command, so reset the last command time
+  last_command_time = millis();
+
   // get the packet length
   packet_length = (byte)Serial.read();
-
-  while (not Serial.available())
-  {
-    delay(1);
-  }
 
   // get the command byte
   command = (byte)Serial.read();
 
   // uncomment the next line to see the packet length and command
   //send_debug_info(packet_length, command);
-  command_entry = command_table[command];
 
-  if (packet_length > 1)
-  {
-    // get the data for that command
-    for (int i = 0; i < packet_length - 1; i++)
-    {
-      // need this delay or data read is not correct
-      while (not Serial.available())
-      {
-        delay(1);
-      }
-      command_buffer[i] = (byte)Serial.read();
-      // uncomment out to see each of the bytes following the command
-      //send_debug_info(i, command_buffer[i]);
-    }
+  // if the packet length is 1, then we have received the entire packet
+  if (packet_length <= 1) {
+    dispatch_command();
   }
+ 
+}
+
+// get the data for the command from the serial link
+void get_command_buffer()
+{
+  // check to see if we have received the entire packet
+  if (Serial.available() < packet_length - 1)
+  {
+    return;
+  }
+
+  // we have received a command, so reset the last command time
+  last_command_time = millis();
+
+  // read the rest of the packet
+  Serial.readBytes(command_buffer, packet_length - 1);
+
+  // dispatch the command
+  dispatch_command();
+}
+
+// dispatch the command
+void dispatch_command()
+{
+  // return if we don't have a valid command
+   if (command > sizeof(command_table)) {
+    return;
+  }
+
+  // get the command entry
+  command_descriptor command_entry = command_table[command];
+
+  // reset the packet length and command
+  reset_command_input();
+
+  // execute the command
   command_entry.command_func();
+  
+  // clear the command buffer
+  memset(command_buffer, 0, sizeof(command_buffer));
+}
+
+// reset the packet length and command
+void reset_command_input() {
+  packet_length = 0;
+  command = 255;
 }
 
 // reset the internal data structures to a known state
