@@ -1823,6 +1823,7 @@ boolean delay_done(unsigned int pool_time, unsigned long *l_previous_millis) {
 // scan the digital input pins for changes
 void scan_digital_inputs()
 {
+
   byte value;
 
   // report message
@@ -1833,15 +1834,10 @@ void scan_digital_inputs()
   // byte 3 = value
   byte report_message[4] = {3, DIGITAL_REPORT, 0, 0};
   
-  if (!delay_done(analog_sampling_interval, &previous_millis))
-  {
-    return;
-  }
-
   for (uint8_t i = 0; i < MAX_DIGITAL_PINS_SUPPORTED; i++)
   {
     // if the pin is not a digital input or pullup
-    if (the_digital_pins[i].pin_mode != INPUT ||
+    if (the_digital_pins[i].pin_mode != INPUT &&
         the_digital_pins[i].pin_mode != INPUT_PULLUP)
     {
       continue;
