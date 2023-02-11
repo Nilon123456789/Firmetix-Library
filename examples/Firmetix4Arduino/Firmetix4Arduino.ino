@@ -326,7 +326,7 @@ struct command_descriptor
 // An array of pointers to the command functions.
 // The list must be in the same order as the command defines.
 
-command_descriptor command_table[] =
+const command_descriptor command_table[] =
 {
   {&serial_loopback},
   {&set_pin_mode},
@@ -396,6 +396,14 @@ command_descriptor command_table[] =
 // buffer to hold incoming command data
 byte command_buffer[MAX_COMMAND_LENGTH];
 
+// the current lenght of the expected packet
+byte packet_length = 0;
+// the current command index for the packet
+byte command = 255;
+// time of last command received used to detect timeouts
+unsigned long last_command_time = 0;
+unsigned int command_timeout = 1000;
+
 
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                 Reporting Defines and Support                    */
@@ -451,7 +459,7 @@ bool stop_reports = false; // a flag to stop sending all report messages
 
 // firmware version - update this when bumping the version
 #define FIRMWARE_MAJOR 6
-#define FIRMWARE_MINOR 0
+#define FIRMWARE_MINOR 1
 #define FIRMWARE_PATCH 0
 
 
@@ -557,9 +565,9 @@ TwoWire *current_i2c_port;
 // To translate a pin number from an integer value to its analog pin number
 // equivalent, this array is used to look up the value to use for the pin.
 #ifdef ARDUINO_SAMD_MKRWIFI1010
-int analog_read_pins[20] = {A0, A1, A2, A3, A4, A5, A6};
+const int analog_read_pins[20] = {A0, A1, A2, A3, A4, A5, A6};
 #else
-int analog_read_pins[20] = {A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15};
+const int analog_read_pins[20] = {A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15};
 #endif
 
 // a descriptor for digital pins
@@ -568,7 +576,7 @@ struct pin_descriptor
   byte pin_number;
   byte pin_mode;
   bool reporting_enabled; // If true, then send reports if an input pin
-  int last_value;         // Last value read for input mode
+  uint8_t last_value;         // Last value read for input mode
 };
 
 // an array of digital_pin_descriptors
@@ -588,7 +596,7 @@ struct analog_pin_descriptor
 // an array of analog_pin_descriptors
 analog_pin_descriptor the_analog_pins[MAX_ANALOG_PINS_SUPPORTED];
 
-unsigned long current_millis;  // for analog input loop
+unsigned long current_millis;  // for the delay
 unsigned long previous_millis; // for analog input loop
 uint8_t analog_sampling_interval = 19;
 
@@ -626,7 +634,6 @@ byte sonars_index = 0; // index into sonars struct
 byte last_sonar_visited = 0;
 #endif //SONAR_ENABLED
 
-unsigned long sonar_current_millis;  // for analog input loop
 unsigned long sonar_previous_millis; // for analog input loop
 
 #ifdef SONAR_ENABLED
@@ -644,7 +651,7 @@ struct DHT
 {
   uint8_t pin;
   uint8_t dht_type;
-  unsigned int last_value;
+  uint8_t last_value;
   DHTStable *dht_sensor;
 };
 
@@ -653,7 +660,6 @@ DHT dhts[MAX_DHTS];
 
 byte dht_index = 0; // index into dht struct
 
-unsigned long dht_current_millis;      // for analog input loop
 unsigned long dht_previous_millis;     // for analog input loop
 unsigned int dht_scan_interval = 2000; // scan dht's every 2 seconds
 #endif // DHT_ENABLED
@@ -715,14 +721,10 @@ void set_pin_mode()
   switch (mode)
   {
     case INPUT:
-      the_digital_pins[pin].pin_mode = mode;
-      the_digital_pins[pin].reporting_enabled = command_buffer[2];
-      pinMode(pin, INPUT);
-      break;
     case INPUT_PULLUP:
       the_digital_pins[pin].pin_mode = mode;
       the_digital_pins[pin].reporting_enabled = command_buffer[2];
-      pinMode(pin, INPUT_PULLUP);
+      pinMode(pin, mode);
       break;
     case OUTPUT:
       the_digital_pins[pin].pin_mode = mode;
@@ -776,16 +778,16 @@ void analog_write()
 // pin basis, or enable those on a pin basis.
 void modify_reporting()
 {
-  int pin = command_buffer[1];
+  uint8_t pin = command_buffer[1];
 
   switch (command_buffer[0])
   {
     case REPORTING_DISABLE_ALL:
-      for (int i = 0; i < MAX_DIGITAL_PINS_SUPPORTED; i++)
+      for (uint8_t i = 0; i < MAX_DIGITAL_PINS_SUPPORTED; i++)
       {
         the_digital_pins[i].reporting_enabled = false;
       }
-      for (int i = 0; i < MAX_ANALOG_PINS_SUPPORTED; i++)
+      for (uint8_t i = 0; i < MAX_ANALOG_PINS_SUPPORTED; i++)
       {
         the_analog_pins[i].reporting_enabled = false;
       }
@@ -855,12 +857,12 @@ void get_max_pins()
 
 // Find the first servo that is not attached to a pin
 // This is a helper function not called directly via the API
-int find_servo()
+byte find_servo()
 {
-  int index = -1;
+  byte index = (byte)254;
 
 #ifdef SERVO_ENABLED
-  for (int i = 0; i < MAX_SERVOS; i++)
+  for (byte i = (byte)0; i < MAX_SERVOS; i++)
   {
     if (servos[i].attached() == false)
     {
@@ -878,14 +880,13 @@ void servo_attach()
 {
 #ifdef SERVO_ENABLED
   byte pin = command_buffer[0];
-  int servo_found = -1;
 
   int minpulse = (command_buffer[1] << 8) + command_buffer[2];
   int maxpulse = (command_buffer[3] << 8) + command_buffer[4];
 
   // find the first available open servo
-  servo_found = find_servo();
-  if (servo_found != -1)
+  byte servo_found = find_servo();
+  if (servo_found != (byte)254)
   {
     pin_to_servo_index_map[servo_found] = pin;
     servos[servo_found].attach(pin, minpulse, maxpulse);
@@ -906,7 +907,7 @@ void servo_write()
   byte pin = command_buffer[0];
   int angle = command_buffer[1];
   // find the servo object for the pin
-  for (int i = 0; i < MAX_SERVOS; i++)
+  for (byte i = 0; i < MAX_SERVOS; i++)
   {
     if (pin_to_servo_index_map[i] == pin)
     {
@@ -925,12 +926,12 @@ void servo_detach()
   byte pin = command_buffer[0];
 
   // find the servo object for the pin
-  for (int i = 0; i < MAX_SERVOS; i++)
+  for (uint8_t i = 0; i < MAX_SERVOS; i++)
   {
     if (pin_to_servo_index_map[i] == pin)
     {
 
-      pin_to_servo_index_map[i] = -1;
+      pin_to_servo_index_map[i] = 254;
       servos[i].detach();
     }
   }
@@ -972,7 +973,7 @@ void i2c_read()
   // i2c port [4]
   // write the register [5]
 
-  int message_size = 0;
+  byte message_size = 0;
   byte address = command_buffer[0];
   byte the_register = command_buffer[1];
 
@@ -1038,7 +1039,7 @@ void i2c_read()
   }
   // send slave address, register and received bytes
 
-  for (int i = 0; i < message_size + 6; i++)
+  for (byte i = 0; i < message_size + 6; i++)
   {
     Serial.write(i2c_report_message[i]);
   }
@@ -1071,7 +1072,7 @@ void i2c_write()
   current_i2c_port->beginTransmission(command_buffer[1]);
 
   // write the data to the device
-  for (int i = 0; i < command_buffer[0]; i++)
+  for (byte i = 0; i < command_buffer[0]; i++)
   {
     current_i2c_port->write(command_buffer[i + 3]);
   }
@@ -1146,11 +1147,11 @@ void dht_new()
 void init_spi() {
 
 #ifdef SPI_ENABLED
-  int cs_pin;
+  uint8_t cs_pin;
 
   //Serial.print(command_buffer[1]);
   // initialize chip select GPIO pins
-  for (int i = 0; i < command_buffer[0]; i++) {
+  for (byte i = 0; i < command_buffer[0]; i++) {
     cs_pin = command_buffer[1 + i];
     // Chip select is active-low, so we'll initialise it to a driven-high state
     pinMode(cs_pin, OUTPUT);
@@ -1163,9 +1164,9 @@ void init_spi() {
 // write a number of blocks to the SPI device
 void write_blocking_spi() {
 #ifdef SPI_ENABLED
-  int num_bytes = command_buffer[0];
+  byte num_bytes = command_buffer[0];
 
-  for (int i = 0; i < num_bytes; i++) {
+  for (byte i = 0; i < num_bytes; i++) {
     SPI.transfer(command_buffer[1 + i] );
   }
 #endif
@@ -1195,7 +1196,7 @@ void read_blocking_spi() {
 
   // now read the specified number of bytes and place
   // them in the report buffer
-  for (int i = 0; i < command_buffer[0] ; i++) {
+  for (byte i = 0; i < command_buffer[0] ; i++) {
     spi_report_message[i + 4] = SPI.transfer(0x00);
   }
   Serial.write(spi_report_message, command_buffer[0] + 4);
@@ -1224,8 +1225,8 @@ void set_format_spi() {
 // set the SPI chip select line
 void spi_cs_control() {
 #ifdef SPI_ENABLED
-  int cs_pin = command_buffer[0];
-  int cs_state = command_buffer[1];
+  byte cs_pin = command_buffer[0];
+  byte cs_state = command_buffer[1];
   digitalWrite(cs_pin, cs_state);
 #endif
 }
@@ -1254,7 +1255,7 @@ void onewire_select() {
 
   uint8_t dev_address[8];
 
-  for (int i = 0; i < 8; i++) {
+  for (byte i = 0; i < 8; i++) {
     dev_address[i] = command_buffer[i];
   }
   ow->select(dev_address);
@@ -1635,7 +1636,6 @@ void stepper_is_running() {
 }
 
 
-
 // stop all reports from being generated
 
 void stop_all_reports()
@@ -1643,6 +1643,7 @@ void stop_all_reports()
   stop_reports = true;
   delay(20);
   Serial.flush();
+  reset_command_input();
 }
 
 // enable all reports to be generated
@@ -1651,54 +1652,93 @@ void enable_all_reports()
   Serial.flush();
   stop_reports = false;
   delay(20);
+  reset_command_input();
 }
 
 // retrieve the next command from the serial link
 void get_next_command()
 {
-  byte command;
-  byte packet_length;
-  command_descriptor command_entry;
 
-  // clear the command buffer
-  memset(command_buffer, 0, sizeof(command_buffer));
+  // if we have not received all packets in 1 second, then reset the packet length and command
+  if(delay_done(command_timeout, &last_command_time)) {
+    reset_command_input();
+  }
+
+  // if we already have received a packet, try to get the data, then return
+  if (packet_length > 1) {
+    get_command_buffer();
+    return;
+  }
 
   // if there is no command waiting, then return
-  if (not Serial.available())
+  if (Serial.available() < 2)
   {
     return;
   }
+
+  // we have received a command, so reset the last command time
+  last_command_time = millis();
+
   // get the packet length
   packet_length = (byte)Serial.read();
-
-  while (not Serial.available())
-  {
-    delay(1);
-  }
 
   // get the command byte
   command = (byte)Serial.read();
 
   // uncomment the next line to see the packet length and command
   //send_debug_info(packet_length, command);
-  command_entry = command_table[command];
 
-  if (packet_length > 1)
-  {
-    // get the data for that command
-    for (int i = 0; i < packet_length - 1; i++)
-    {
-      // need this delay or data read is not correct
-      while (not Serial.available())
-      {
-        delay(1);
-      }
-      command_buffer[i] = (byte)Serial.read();
-      // uncomment out to see each of the bytes following the command
-      //send_debug_info(i, command_buffer[i]);
-    }
+  // if the packet length is 1, then we have received the entire packet
+  if (packet_length <= 1) {
+    dispatch_command();
   }
+ 
+}
+
+// get the data for the command from the serial link
+void get_command_buffer()
+{
+  // check to see if we have received the entire packet
+  if (Serial.available() < packet_length - 1)
+  {
+    return;
+  }
+
+  // we have received a command, so reset the last command time
+  last_command_time = millis();
+
+  // read the rest of the packet
+  Serial.readBytes(command_buffer, packet_length - 1);
+
+  // dispatch the command
+  dispatch_command();
+}
+
+// dispatch the command
+void dispatch_command()
+{
+  // return if we don't have a valid command
+   if (command > sizeof(command_table)) {
+    return;
+  }
+
+  // get the command entry
+  command_descriptor command_entry = command_table[command];
+
+  // reset the packet length and command
+  reset_command_input();
+
+  // execute the command
   command_entry.command_func();
+  
+  // clear the command buffer
+  memset(command_buffer, 0, sizeof(command_buffer));
+}
+
+// reset the packet length and command
+void reset_command_input() {
+  packet_length = 0;
+  command = 255;
 }
 
 // reset the internal data structures to a known state
@@ -1714,7 +1754,7 @@ void reset_data() {
 
   // detach any attached servos
 #ifdef SERVO_ENABLED
-  for (int i = 0; i < MAX_SERVOS; i++)
+  for (uint8_t i = 0; i < MAX_SERVOS; i++)
   {
     if (servos[i].attached() == true)
     {
@@ -1726,7 +1766,6 @@ void reset_data() {
 #ifdef SONAR_ENABLED
   sonars_index = 0; // reset the index into the sonars array
 
-  sonar_current_millis = 0;  // for analog input loop
   sonar_previous_millis = 0; // for analog input loop
   sonar_scan_interval = 33;  // Milliseconds between sensor pings
   memset(sonars, 0, sizeof(sonars));
@@ -1735,7 +1774,6 @@ void reset_data() {
 #ifdef DHT_ENABLED
   dht_index = 0; // index into dht array
 
-  dht_current_millis = 0;      // for analog input loop
   dht_previous_millis = 0;     // for analog input loop
   dht_scan_interval = 2000;    // scan dht's every 2 seconds
 #endif
@@ -1772,10 +1810,20 @@ void init_pin_structures() {
 /*    Scanning Inputs, Generating Reports And Running Steppers      */
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
+boolean delay_done(unsigned int pool_time, unsigned long *l_previous_millis) {
+  // check if enough time has passed since last time depending on the pool time (in milliseconds)
+  current_millis = millis();
+  if (current_millis - *l_previous_millis >= pool_time) {
+    *l_previous_millis = current_millis;
+    return true;
+  }
+  return false;
+}
 
 // scan the digital input pins for changes
 void scan_digital_inputs()
 {
+
   byte value;
 
   // report message
@@ -1785,25 +1833,33 @@ void scan_digital_inputs()
   // byte 2 = pin number
   // byte 3 = value
   byte report_message[4] = {3, DIGITAL_REPORT, 0, 0};
-
-  for (int i = 0; i < MAX_DIGITAL_PINS_SUPPORTED; i++)
+  
+  for (uint8_t i = 0; i < MAX_DIGITAL_PINS_SUPPORTED; i++)
   {
-    if (the_digital_pins[i].pin_mode == INPUT ||
-        the_digital_pins[i].pin_mode == INPUT_PULLUP)
+    // if the pin is not a digital input or pullup
+    if (the_digital_pins[i].pin_mode != INPUT &&
+        the_digital_pins[i].pin_mode != INPUT_PULLUP)
     {
-      if (the_digital_pins[i].reporting_enabled)
-      {
-        // if the value changed since last read
-        value = (byte)digitalRead(the_digital_pins[i].pin_number);
-        if (value != the_digital_pins[i].last_value)
-        {
-          the_digital_pins[i].last_value = value;
-          report_message[2] = (byte)i;
-          report_message[3] = value;
-          Serial.write(report_message, 4);
-        }
-      }
+      continue;
     }
+
+    // if the pin is not reporting
+    if (!the_digital_pins[i].reporting_enabled)
+    {
+      continue;
+    }
+    // if the value didn't change since last read
+    value = (byte)digitalRead(the_digital_pins[i].pin_number);
+    if (value == the_digital_pins[i].last_value)
+    {
+      continue;
+    }
+
+    the_digital_pins[i].last_value = value;
+    report_message[2] = (byte)i;
+    report_message[3] = value;
+    Serial.write(report_message, 4);
+
   }
 }
 
@@ -1825,36 +1881,46 @@ void scan_analog_inputs()
   uint8_t adjusted_pin_number;
   int differential;
 
-  current_millis = millis();
-  if (current_millis - previous_millis > analog_sampling_interval)
+  if (!delay_done(analog_sampling_interval, &previous_millis))
   {
-    previous_millis = current_millis;
+    return;
+  }
 
-    for (int i = 0; i < MAX_ANALOG_PINS_SUPPORTED; i++)
+  for (uint8_t i = 0; i < MAX_ANALOG_PINS_SUPPORTED; i++)
+  {
+    // if the pin is not analog
+    if (the_analog_pins[i].pin_mode != AT_ANALOG)
     {
-      if (the_analog_pins[i].pin_mode == AT_ANALOG)
-      {
-        if (the_analog_pins[i].reporting_enabled)
-        {
-          // if the value changed since last read
-          // adjust pin number for the actual read
-          adjusted_pin_number = (uint8_t)(analog_read_pins[i]);
-          value = analogRead(adjusted_pin_number);
-          differential = abs(value - the_analog_pins[i].last_value);
-          if (differential >= the_analog_pins[i].differential)
-          {
-            //trigger value achieved, send out the report
-            the_analog_pins[i].last_value = value;
-            // input_message[1] = the_analog_pins[i].pin_number;
-            report_message[2] = (byte)i;
-            report_message[3] = highByte(value); // get high order byte
-            report_message[4] = lowByte(value);
-            Serial.write(report_message, 5);
-            delay(1);
-          }
-        }
-      }
+      continue;
     }
+
+    // if the pin is not reporting
+    if (!the_analog_pins[i].reporting_enabled)
+    {
+      continue;
+    }
+
+    // if the value changed since last read
+    // adjust pin number for the actual read
+    adjusted_pin_number = (uint8_t)(analog_read_pins[i]);
+    value = analogRead(adjusted_pin_number);
+    differential = abs(value - the_analog_pins[i].last_value);
+
+    // if the pin didn't change enough
+    if (differential < the_analog_pins[i].differential)
+    {
+      continue;
+    }
+
+    //trigger value achieved, send out the report
+    the_analog_pins[i].last_value = value;
+    // input_message[1] = the_analog_pins[i].pin_number;
+    report_message[2] = (byte)i;
+    report_message[3] = highByte(value); // get high order byte
+    report_message[4] = lowByte(value);
+    Serial.write(report_message, 5);
+    delay(1);
+
   }
 }
 
@@ -1864,34 +1930,40 @@ void scan_sonars()
 #ifdef SONAR_ENABLED
   unsigned int distance;
 
-  if (sonars_index)
+  if (!sonars_index)
   {
-    sonar_current_millis = millis();
-    if (sonar_current_millis - sonar_previous_millis > sonar_scan_interval)
-    {
-      sonar_previous_millis = sonar_current_millis;
-      distance = sonars[last_sonar_visited].usonic->read();
-      if (distance != sonars[last_sonar_visited].last_value)
-      {
-        sonars[last_sonar_visited].last_value = distance;
-
-        // byte 0 = packet length
-        // byte 1 = report type
-        // byte 2 = trigger pin number
-        // byte 3 = distance high order byte
-        // byte 4 = distance low order byte
-        byte report_message[5] = {4, SONAR_DISTANCE, sonars[last_sonar_visited].trigger_pin,
-                                  (byte)(distance >> 8), (byte)(distance & 0xff)
-                                 };
-        Serial.write(report_message, 5);
-      }
-      last_sonar_visited++;
-      if (last_sonar_visited == sonars_index)
-      {
-        last_sonar_visited = 0;
-      }
-    }
+    return;
   }
+
+  if(!delay_done(sonar_scan_interval, &sonar_previous_millis))
+  {
+    return;
+  }
+
+  distance = sonars[last_sonar_visited].usonic->read();
+  if (distance == sonars[last_sonar_visited].last_value)
+  {
+    return;
+  }
+
+  sonars[last_sonar_visited].last_value = distance;
+
+  // byte 0 = packet length
+  // byte 1 = report type
+  // byte 2 = trigger pin number
+  // byte 3 = distance high order byte
+  // byte 4 = distance low order byte
+  byte report_message[5] = {4, SONAR_DISTANCE, sonars[last_sonar_visited].trigger_pin,
+                            (byte)(distance >> 8), (byte)(distance & 0xff)
+                           };
+  Serial.write(report_message, 5);
+  
+  last_sonar_visited++;
+  if (last_sonar_visited != sonars_index)
+  {
+    return;
+  }
+  last_sonar_visited = 0;
 #endif
 }
 
@@ -1917,71 +1989,80 @@ void scan_dhts()
   // byte 9 = temperature integer portion
   // byte 10= temperature fractional portion
 
-  byte report_message[11] = {10, DHT_REPORT, DHT_DATA, 0, 0, 0, 0, 0, 0, 0, 0};
+  uint8_t report_message[11] = {10, DHT_REPORT, DHT_DATA, 0, 0, 1, 0, 0, 0, 0, 0};
 
-  int rv;
+  // rv returns an int but we only need to know if it's 0 or not 
+  //since the DHTLIB_OK returns 0 other codes are errors
+  byte rv;
+
+  float humidity, temperature;
 
   // are there any dhts to read?
-  if (dht_index)
+  if (!dht_index)
   {
-    // is it time to do the read? This should occur every 2 seconds
-    dht_current_millis = millis();
-    if (dht_current_millis - dht_previous_millis > dht_scan_interval)
-    {
-      // update for the next scan
-      dht_previous_millis = dht_current_millis;
+    return;
+  }
 
-      // read and report all the dht sensors
-      for (int i = 0; i < dht_index; i++)
-      {
-        report_message[0] = 10; //message length
-        report_message[1] = DHT_REPORT;
-        // error type in report_message[2] will be set further down
-        report_message[3] = dhts[i].pin;
-        report_message[4] = dhts[i].dht_type;
-        // read the device
-        if (dhts[i].dht_type == 22) {
-          rv = dhts[i].dht_sensor->read22(dhts[i].pin);
-        }
-        else {
-          rv = dhts[i].dht_sensor->read11(dhts[i].pin);
-        }
-        report_message[2] = (uint8_t)rv;
+  // is it time to do the read? This should occur every 2 seconds
+  if(!delay_done(dht_scan_interval, &dht_previous_millis))
+  {
+    return;
+  }
 
-        // if rv is not zero, this is an error report
-        if (rv) {
-          Serial.write(report_message, 11);
-          return;
-        }
-        else {
-          float j, f;
-          float humidity = dhts[i].dht_sensor->getHumidity();
-          if (humidity >= 0.0) {
-            report_message[5] = 0;
-          }
-          else {
-            report_message[5] = 1;
-          }
-          f = modff(humidity, &j);
-          report_message[7] = (uint8_t)j;
-          report_message[8] = (uint8_t)(f * 100);
+  // read and report all the dht sensors
+  for (uint8_t i = 0; i < dht_index; i++)
+  {
+    report_message[3] = dhts[i].pin;
+    report_message[4] = dhts[i].dht_type;
+    report_message[5] = 1;
+    report_message[6] = 1;
 
-          float temperature = dhts[i].dht_sensor->getTemperature();
-          if (temperature >= 0.0) {
-            report_message[6] = 0;
-          }
-          else {
-            report_message[6] = 1;
-          }
-
-          f = modff(temperature, &j);
-
-          report_message[9] = (uint8_t)j;
-          report_message[10] = (uint8_t)(f * 100);
-          Serial.write(report_message, 11);
-        }
-      }
+    // read the device
+    if (dhts[i].dht_type == 22) {
+      rv = dhts[i].dht_sensor->read22(dhts[i].pin);
     }
+    else {
+      rv = dhts[i].dht_sensor->read11(dhts[i].pin);
+    }
+    report_message[2] = (uint8_t)rv;
+
+    // if rv is not zero, this is an error report
+    if (rv) {
+      Serial.write(report_message, 11);
+      return;
+    }
+    
+    float j, f;
+    humidity = dhts[i].dht_sensor->getHumidity();
+    if (humidity >= 0.0) {
+      report_message[5] = 0;
+    }
+
+    f = modff(humidity, &j);
+    report_message[7] = (uint8_t)j;
+    report_message[8] = (uint8_t)(f * 100);
+
+    temperature = dhts[i].dht_sensor->getTemperature();
+    if (temperature >= 0.0) {
+      report_message[6] = 0;
+    }
+
+    f = modff(temperature, &j);
+
+    // sotre the last values in a byte
+    uint8_t tmp_and_hum =  (uint8_t)((unsigned long)(humidity * temperature * 100) % 256);
+
+    // send_debug_info(tmp_and_hum, dhts[i].last_value) // uncomment for debugging last dht value
+    
+    if (tmp_and_hum == dhts[i].last_value) {
+      continue;
+    }
+
+    dhts[i].last_value = tmp_and_hum;
+
+    report_message[9] = (uint8_t)j;
+    report_message[10] = (uint8_t)(f * 100);
+    Serial.write(report_message, 11);
   }
 #endif
 }
@@ -1994,42 +2075,43 @@ void run_steppers() {
   long target_position;
 
 
-  for ( int i = 0; i < MAX_NUMBER_OF_STEPPERS; i++) {
+  for ( uint8_t i = 0; i < MAX_NUMBER_OF_STEPPERS; i++) {
     if (stepper_run_modes[i] == STEPPER_STOP) {
       continue;
     }
-    else {
-      steppers[i]->enableOutputs();
-      switch (stepper_run_modes[i]) {
-        case STEPPER_RUN:
-          steppers[i]->run();
-          running = steppers[i]->isRunning();
-          if (!running) {
-            byte report_message[3] = {2, STEPPER_RUN_COMPLETE_REPORT, (byte)i};
-            Serial.write(report_message, 3);
-            stepper_run_modes[i] = STEPPER_STOP;
-          }
-          break;
-        case STEPPER_RUN_SPEED:
-          steppers[i]->runSpeed();
-          break;
-        case STEPPER_RUN_SPEED_TO_POSITION:
-          running = steppers[i]->runSpeedToPosition();
-          target_position = steppers[i]->targetPosition();
-          if (target_position == steppers[i]->currentPosition()) {
-            byte report_message[3] = {2, STEPPER_RUN_COMPLETE_REPORT, (byte)i};
-            Serial.write(report_message, 3);
-            stepper_run_modes[i] = STEPPER_STOP;
-
-          }
-          break;
-        default:
-          break;
-      }
+    steppers[i]->enableOutputs();
+    switch (stepper_run_modes[i]) {
+      case STEPPER_RUN:
+        steppers[i]->run();
+        running = steppers[i]->isRunning();
+        if (!running) {
+          stepper_send_complete_report(i);
+        }
+        break;
+      case STEPPER_RUN_SPEED:
+        steppers[i]->runSpeed();
+        break;
+      case STEPPER_RUN_SPEED_TO_POSITION:
+        running = steppers[i]->runSpeedToPosition();
+        target_position = steppers[i]->targetPosition();
+        if (target_position == steppers[i]->currentPosition()) {
+          stepper_send_complete_report(i);
+        }
+        break;
+      default:
+        break;
     }
   }
 #endif
 }
+
+#ifdef STEPPERS_ENABLED
+void stepper_send_complete_report(byte stepper_number) {
+  byte report_message[3] = {2, STEPPER_RUN_COMPLETE_REPORT, (byte)stepper_number};
+  Serial.write(report_message, 3);
+  stepper_run_modes[stepper_number] = STEPPER_STOP;
+}
+#endif
 
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                    Setup And Loop                                */
@@ -2068,7 +2150,7 @@ void setup()
 
 #ifdef STEPPERS_ENABLED
 
-  for ( int i = 0; i < MAX_NUMBER_OF_STEPPERS; i++) {
+  for ( uint8_t i = 0; i < MAX_NUMBER_OF_STEPPERS; i++) {
     stepper_run_modes[i] = STEPPER_STOP ;
   }
 #endif
