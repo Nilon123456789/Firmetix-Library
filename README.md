@@ -1,2 +1,2 @@
-# Firmetix4Arduino
-The Firmetix Project Server For Arduino-Core.
+# Firmetix-Library
+The Firmetix Project Server For Arduino-Core and ESP.
