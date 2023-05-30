@@ -235,6 +235,12 @@ extern void stepper_is_running();
 
 extern void get_features();
 
+extern void sonar_disable();
+
+extern void sonar_enable();
+
+extern void board_hard_reset();
+
 extern void tone_play();
 
 extern void no_tone();
@@ -312,6 +318,9 @@ const command_descriptor command_table[] = {
   { &stepper_get_distance_to_go },
   (&stepper_get_target_position),
   (&get_features),
+  (&sonar_disable),
+  (&sonar_enable),
+  (&board_hard_reset),
   (&tone_play),
   (&no_tone),
   (&get_max_pins),
@@ -419,8 +428,10 @@ TwoWire *current_i2c_port;
 
 // To translate a pin number from an integer value to its analog pin number
 // equivalent, this array is used to look up the value to use for the pin.
-#ifdef ARDUINO_SAMD_MKRWIFI1010
-const int analog_read_pins[20] = { A0, A1, A2, A3, A4, A5, A6 };
+#ifdef ARDUINO_ARCH_RENESAS
+const int analog_read_pins[20] = {A0, A1, A2, A3, A4, A5};
+#elif ARDUINO_SAMD_MKRWIFI1010
+const int analog_read_pins[20] = {A0, A1, A2, A3, A4, A5, A6};
 #else
 const int analog_read_pins[20] = { A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15 };
 #endif
@@ -471,7 +482,8 @@ byte pin_to_servo_index_map[MAX_SERVOS];
 #define MAX_SONARS 6
 
 #ifdef SONAR_ENABLED
-struct Sonar {
+struct Sonar
+{
   uint8_t trigger_pin;
   unsigned int last_value;
   Ultrasonic *usonic;
@@ -480,18 +492,22 @@ struct Sonar {
 // an array of sonar objects
 Sonar sonars[MAX_SONARS];
 
-byte sonars_index = 0;  // index into sonars struct
+byte sonars_index = 0; // index into sonars struct
 
 // used for scanning the sonar devices.
 byte last_sonar_visited = 0;
-#endif  //SONAR_ENABLED
 
-unsigned long sonar_previous_millis;  // for analog input loop
 
-#ifdef SONAR_ENABLED
-uint8_t sonar_scan_interval = 33;  // Milliseconds between sensor pings
+// flag to start and stop sonar reporing
+bool sonar_reporting_enabled = true; 
+
+
+uint8_t sonar_scan_interval = 33;    // Milliseconds between sensor pings
 // (29ms is about the min to avoid = 19;
-#endif
+
+unsigned long sonar_previous_millis; // for analog input loop
+
+#endif //SONAR_ENABLED
 
 // DHT Management
 #define MAX_DHTS 6                 // max number of devices
@@ -920,6 +936,23 @@ void no_tone() {
   // command_buffer[0] = pin
   noTone(command_buffer[0]);
 #endif
+}
+
+// Disable sonar reporting
+void sonar_disable(){
+    sonar_reporting_enabled = false;
+}
+
+// Enable sonar reporting
+void sonar_enable(){
+    sonar_reporting_enabled = true;
+}
+
+// Hard reset the board
+void board_hard_reset(){
+  send_debug_info(1, 1);
+  NVIC_SystemReset();
+  delay(2000);
 }
 
 
@@ -1926,7 +1959,9 @@ void loop() {
     scan_analog_inputs();
 
 #ifdef SONAR_ENABLED
+  if(sonar_reporting_enabled ){
     scan_sonars();
+  }
 #endif
 
 #ifdef DHT_ENABLED

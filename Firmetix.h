@@ -7,7 +7,7 @@ public:
 
     // firmware version - update this when bumping the version
     #define FIRMWARE_MAJOR 7
-    #define FIRMWARE_MINOR 0
+    #define FIRMWARE_MINOR 1
     #define FIRMWARE_PATCH 0
 
     #ifndef LED_BUILTIN
@@ -77,9 +77,12 @@ public:
     #define STEPPER_GET_DISTANCE_TO_GO 52
     #define STEPPER_GET_TARGET_POSITION 53
     #define GET_FEATURES 54
-    #define TONE 55
-    #define NO_TONE 56
-    #define GET_MAX_PINS = 57
+    #define SONAR_DISABLE 55
+    #define SONAR_ENABLE 56
+    #define BOARD_HARD_RESET 57
+    #define TONE = 70
+    #define NO_TONE = 71
+    #define GET_MAX_PINS = 72
 
     // maximum length of a command in bytes
     #define MAX_COMMAND_LENGTH 30
