@@ -131,7 +131,6 @@ WiFiServer wifiServer(PORT);
 // wifi client connection
 WiFiClient client;
 
-
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                    Arduino ID                      */
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
@@ -265,8 +264,6 @@ extern void sonar_disable();
 
 extern void sonar_enable();
 
-extern void board_hard_reset();
-
 extern void tone_play();
 
 extern void no_tone();
@@ -348,7 +345,6 @@ const command_descriptor command_table[] =
   (&get_features),
   (&sonar_disable),
   (&sonar_enable),
-  (&board_hard_reset),
   (&tone_play),
   (&no_tone),
   (&get_max_pins),
@@ -930,13 +926,6 @@ void sonar_disable(){
 void sonar_enable(){
     sonar_reporting_enabled = true;
 }
-
-void board_hard_reset(){
-  send_debug_info(1, 1);
-  NVIC_SystemReset();
-  delay(2000);
-}
-
 
 /***********************************
    DHT adding a new device

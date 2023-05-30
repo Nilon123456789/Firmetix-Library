@@ -79,7 +79,6 @@ public:
     #define GET_FEATURES 54
     #define SONAR_DISABLE 55
     #define SONAR_ENABLE 56
-    #define BOARD_HARD_RESET 57
     #define TONE = 70
     #define NO_TONE = 71
     #define GET_MAX_PINS = 72
