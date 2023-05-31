@@ -107,8 +107,10 @@
 
 #ifdef ESP32
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #elif ESP8266
 #include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
 #else
 #error "This library only supports ESP32 and ESP8266 boards."
 #endif
@@ -118,8 +120,8 @@
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
 // Modify the next two lines to match your network values
-const char *ssid = "YOUR_SSID";
-const char *password = "YOUR_PASSWORD";
+const char *ssid = "lluma";
+const char *password = "UJWF3M94J9TNT";
 
 // Default ip port value.
 // Set the firmetix port to the same value
@@ -1960,6 +1962,11 @@ void setup()
 
   Serial.begin(115200);
   delay(1000);
+  
+  // Seting up the hostname
+  String hostName = "Firmetix4ESP-WIFI-" + (String) ARDUINO_ID;
+  WiFi.hostname(hostName.c_str());
+  Serial.println("Hostname: " + hostName);
 
   #ifdef ESP32
   WiFi.mode(WIFI_STA);
@@ -1991,6 +1998,16 @@ void setup()
 
   Serial.print("  IP Port: ");
   Serial.println(PORT);
+
+  Serial.println("Seting up mDNS");
+  const char* deviceName = hostName.c_str();
+  // start the mDNS responder
+  if (!MDNS.begin(deviceName)) {
+    Serial.println("Error setting up MDNS responder!");
+  }
+  MDNS.addService("firmetix", "tcp", PORT);
+  Serial.print("mDNS responder started, the adress is : ");
+  Serial.println((String) deviceName + ".local");
 
   // start the server
   wifiServer.begin();
