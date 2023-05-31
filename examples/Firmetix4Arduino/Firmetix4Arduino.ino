@@ -1940,13 +1940,15 @@ void setup() {
   Serial.begin(115200);
 }
 
-void loop() {
+void loop()
+{
   // keep processing incoming commands
   get_next_command();
 
-  if (!stop_reports) {  // stop reporting
-    scan_digital_inputs();
-    scan_analog_inputs();
+  if (stop_reports) return;
+  
+  scan_digital_inputs();
+  scan_analog_inputs();
 
 #ifdef SONAR_ENABLED
   if(sonar_reporting_enabled ){
@@ -1955,11 +1957,9 @@ void loop() {
 #endif
 
 #ifdef DHT_ENABLED
-    scan_dhts();
+  scan_dhts();
 #endif
-    //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
-    run_steppers();
+  run_steppers();
 #endif
-  }
 }

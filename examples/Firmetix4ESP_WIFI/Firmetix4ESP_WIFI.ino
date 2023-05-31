@@ -75,8 +75,10 @@
 #include <Arduino.h>
 #include <Firmetix.h>
 
-#if SERVO_ENABLED
+#if defined(ESP32) && defined(SERVO_ENABLED)
 #include <ESP32Servo.h>
+#elif SERVO_ENABLED
+#include <Servo.h>
 #endif
 
 #ifdef SONAR_ENABLED
@@ -103,15 +105,33 @@
 #include <AccelStepper.h>
 #endif
 
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
-
-#ifndef ESP32
-#error "This example only supports ESP32 boards."
+#ifdef ESP32
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#elif ESP8266
+#include <ESP8266WiFi.h>
+#include <ESP8266mDNS.h>
+#else
+#error "This library only supports ESP32 and ESP8266 boards."
 #endif
 
+/* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
+/* Specifying the SSID, Password, Port For Your Network             */
+/* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
+
+// Modify the next two lines to match your network values
+const char *ssid = "YOUR_SSID";
+const char *password = "YOUR_PASSWORD";
+
+// Default ip port value.
+// Set the firmetix port to the same value
+// if you need to change this value.
+uint16_t PORT = 31335;
+
+WiFiServer wifiServer(PORT);
+
+// wifi client connection
+WiFiClient client;
 
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                    Arduino ID                      */
@@ -336,6 +356,17 @@ const command_descriptor command_table[] =
 // buffer to hold incoming command data
 byte command_buffer[MAX_COMMAND_LENGTH];
 
+// the current lenght of the expected packet
+byte packet_length = 0;
+// the current command index for the packet
+byte command = 255;
+// time of last command received used to detect timeouts
+unsigned long last_command_time = 0;
+unsigned int command_timeout = 1000;
+
+
+
+
 #ifdef I2C_ENABLED
 // A buffer to hold i2c report data
 byte i2c_report_message[64];
@@ -444,6 +475,8 @@ unsigned long sonar_previous_millis; // for analog input loop
 
 #endif //SONAR_ENABLED
 
+
+
 // DHT Management
 #define MAX_DHTS 6                // max number of devices
 #define READ_FAILED_IN_SCANNER 0  // read request failed when scanning
@@ -478,6 +511,7 @@ OneWire *ow = NULL;
 #define MAX_NUMBER_OF_STEPPERS 4
 
 // stepper motor data
+//#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 AccelStepper *steppers[MAX_NUMBER_OF_STEPPERS];
 
@@ -485,72 +519,6 @@ AccelStepper *steppers[MAX_NUMBER_OF_STEPPERS];
 uint8_t stepper_run_modes[MAX_NUMBER_OF_STEPPERS];
 #endif
 
-/* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
-/*                         BLE Functions                            */
-/* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
-
-
-/*********  BLE SPECIFICS ********************/
-BLEServer *pServer = NULL;
-BLECharacteristic * pTxCharacteristic;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-
-#define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E" // UART service UUID
-#define CHARACTERISTIC_UUID_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-#define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-
-
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-      digitalWrite(LED_BUILTIN, LOW);
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-      digitalWrite(LED_BUILTIN, HIGH);
-    }
-};
-
-class MyCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      command_descriptor command_entry;
-      byte command;
-
-      // clear the command buffer
-      memset(command_buffer, 0, sizeof(command_buffer));
-
-      std::string rxValue = pCharacteristic->getValue();
-
-      uint8_t *buf;
-      buf = (uint8_t *) rxValue.data();
-
-      // make sure the packet length is valid for this packet
-      if (rxValue.length() != (buf[0] + 1)) {
-        Serial.println("Invalid packet received");
-        return;
-      }
-
-      // get command id
-      command = buf[1];
-
-      // uncomment to see packet length and command id
-      //send_debug_info(buf[0], buf[1]);
-
-      // get function pointer to command
-      command_entry = command_table[command];
-
-      // copy only the payload to the command buffer
-      // the packet length and command id are removed.
-      for (uint8_t i = 0; i < rxValue.length() - 2; i++) {
-        command_buffer[i] = buf[i + 2];
-      }
-      // execute the command
-      command_entry.command_func();
-    }
-
-};
 
 /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 /*                       Command Functions                          */
@@ -564,16 +532,14 @@ void send_debug_info(byte id, int value)
   debug_buffer[2] = id;
   debug_buffer[3] = highByte(value);
   debug_buffer[4] = lowByte(value);
-  pTxCharacteristic->setValue(debug_buffer, 5);
-  pTxCharacteristic->notify();
+  client.write(debug_buffer, 5);
 }
 
 // a function to loop back data over the serial port
 void serial_loopback()
 {
   byte loop_back_buffer[3] = {2, (byte)SERIAL_LOOP_BACK, command_buffer[0]};
-  pTxCharacteristic->setValue(loop_back_buffer, 3);
-  pTxCharacteristic->notify();
+  client.write(loop_back_buffer, 3);
 }
 
 void set_pin_mode()
@@ -703,8 +669,8 @@ void modify_reporting()
 // retrieve the features byte
 void get_features() {
   byte report_message[3] = {2, FEATURES, features};
-  pTxCharacteristic->setValue(report_message, 3);
-  pTxCharacteristic->notify();
+  client.write(report_message, 3);
+
 }
 
 // Return the firmware version number
@@ -713,24 +679,21 @@ void get_firmware_version()
   byte report_message[5] = {4, FIRMWARE_REPORT, FIRMWARE_MAJOR, FIRMWARE_MINOR,
                             FIRMWARE_PATCH
                            };
-  pTxCharacteristic->setValue(report_message, 5);
-  pTxCharacteristic->notify();
+  client.write(report_message, 5);
 }
 
 // Query the firmware for the Arduino ID in use
 void are_you_there()
 {
   byte report_message[3] = {2, I_AM_HERE, ARDUINO_ID};
-  pTxCharacteristic->setValue(report_message, 3);
-  pTxCharacteristic->notify();
+  client.write(report_message, 3);
 }
 
 // Retrun the max number of pins supported
 void get_max_pins()
 {
   byte report_message[4] = {3, MAX_PIN_REPORT, MAX_DIGITAL_PINS_SUPPORTED, MAX_ANALOG_PINS_SUPPORTED};
-  pTxCharacteristic->setValue(report_message, 4);
-  pTxCharacteristic->notify();
+  client.write(report_message, 4);
 }
 
 /***************************************************
@@ -777,8 +740,7 @@ void servo_attach()
   {
     // no open servos available, send a report back to client
     byte report_message[2] = {SERVO_UNAVAILABLE, pin};
-    pTxCharacteristic->setValue(report_message, 2);
-    pTxCharacteristic->notify();
+    client.write(report_message, 2);
   }
 #endif
 }
@@ -827,7 +789,11 @@ void servo_detach()
 
 void i2c_begin()
 {
-  Wire.begin();
+  byte i2c_port = command_buffer[0];
+  if (not i2c_port)
+  {
+    Wire.begin();
+  }
 }
 
 void i2c_read()
@@ -837,57 +803,65 @@ void i2c_read()
   // register, [1]
   // number of bytes, [2]
   // stop transmitting flag [3]
+  // i2c port [4]
+  // write the register [5]
 
   int message_size = 0;
   byte address = command_buffer[0];
   byte the_register = command_buffer[1];
 
-  Wire.beginTransmission(address);
-  Wire.write((byte)the_register);
-  Wire.endTransmission(command_buffer[3]);      // default = true
+  // write byte is true, then write the register
+  if( command_buffer[5])
+  {
+      Wire.beginTransmission(address);
+      Wire.write((byte)the_register);
+      Wire.endTransmission(command_buffer[3]);      // default = true
+  }
+
   Wire.requestFrom(address, command_buffer[2]); // all bytes are returned in requestFrom
 
   // check to be sure correct number of bytes were returned by slave
   if (command_buffer[2] < Wire.available())
   {
     byte report_message[4] = {3, I2C_TOO_FEW_BYTES_RCVD, 1, address};
-    pTxCharacteristic->setValue(report_message, 4);
-    pTxCharacteristic->notify();
+    client.write(report_message, 4);
     return;
   }
   else if (command_buffer[2] > Wire.available())
   {
     byte report_message[4] = {3, I2C_TOO_MANY_BYTES_RCVD, 1, address};
-    pTxCharacteristic->setValue(report_message, 4);
-    pTxCharacteristic->notify();    return;
+    client.write(report_message, 4);
+    return;
   }
 
   // packet length
-  i2c_report_message[0] = command_buffer[2] + 4;
+  i2c_report_message[0] = command_buffer[2] + 5;
 
   // report type
   i2c_report_message[1] = I2C_READ_REPORT;
 
+  // i2c_port
+  i2c_report_message[2] = command_buffer[4];
+
   // number of bytes read
-  i2c_report_message[2] = command_buffer[2]; // number of bytes
+  i2c_report_message[3] = command_buffer[2]; // number of bytes
 
   // device address
-  i2c_report_message[3] = address;
+  i2c_report_message[4] = address;
 
   // device register
-  i2c_report_message[4] = the_register;
+  i2c_report_message[5] = the_register;
 
   // append the data that was read
   for (message_size = 0; message_size < command_buffer[2] && Wire.available(); message_size++)
   {
-    i2c_report_message[5 + message_size] = Wire.read();
+    i2c_report_message[6 + message_size] = Wire.read();
   }
   // send slave address, register and received bytes
 
-  for (int i = 0; i < message_size + 5; i++)
+  for (int i = 0; i < message_size + 6; i++)
   {
-    pTxCharacteristic->setValue(i2c_report_message, message_size + 5);
-    pTxCharacteristic->notify();
+    client.write(i2c_report_message[i]);
   }
 }
 
@@ -895,14 +869,15 @@ void i2c_write()
 {
   // command_buffer[0] is the number of bytes to send
   // command_buffer[1] is the device address
+  // command_buffer[2] is the i2c port
   // additional bytes to write= command_buffer[3..];
 
   Wire.beginTransmission(command_buffer[1]);
 
   // write the data to the device
-  for (int i = 0; i < command_buffer[0]; i++)
+  for (uint8_t i = 0; i < command_buffer[0]; i++)
   {
-    Wire.write(command_buffer[i + 2]);
+    Wire.write(command_buffer[i + 3]);
   }
   Wire.endTransmission();
   delayMicroseconds(70);
@@ -1033,8 +1008,7 @@ void read_blocking_spi() {
   for (byte i = 0; i < command_buffer[0] ; i++) {
     spi_report_message[i + 4] = SPI.transfer(0x00);
   }
-  pTxCharacteristic->setValue(spi_report_message, command_buffer[0] + 4);
-  pTxCharacteristic->notify();
+  client.write(spi_report_message, command_buffer[0] + 4);
 #endif
 }
 
@@ -1068,8 +1042,7 @@ void onewire_reset() {
   uint8_t reset_return = ow->reset();
   uint8_t onewire_report_message[] = {3, ONE_WIRE_REPORT, ONE_WIRE_RESET, reset_return};
 
-  pTxCharacteristic->setValue(onewire_report_message, 4);
-  pTxCharacteristic->notify();
+  client.write(onewire_report_message, 4);
 #endif
 }
 
@@ -1115,8 +1088,7 @@ void onewire_read() {
 
   uint8_t onewire_report_message[] = {3, ONE_WIRE_REPORT, ONE_WIRE_READ, data};
 
-  pTxCharacteristic->setValue(onewire_report_message, 4);
-  pTxCharacteristic->notify();
+  client.write(onewire_report_message, 4);
 #endif
 }
 
@@ -1138,8 +1110,7 @@ void onewire_search() {
                                      };
 
   ow->search(&onewire_report_message[3]);
-  pTxCharacteristic->setValue(onewire_report_message, 11);
-  pTxCharacteristic->notify();
+  client.write(onewire_report_message, 11);
 #endif
 }
 
@@ -1149,8 +1120,7 @@ void onewire_crc8() {
 
   uint8_t crc = ow->crc8(&command_buffer[1], command_buffer[0]);
   uint8_t onewire_report_message[] = {3, ONE_WIRE_REPORT, ONE_WIRE_CRC8, crc};
-  pTxCharacteristic->setValue(onewire_report_message, 4);
-  pTxCharacteristic->notify();
+  client.write(onewire_report_message, 4);
 #endif
 
 }
@@ -1158,6 +1128,7 @@ void onewire_crc8() {
 // Stepper Motor supported
 // Stepper Motor supported
 void set_pin_mode_stepper() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   // motor_id = command_buffer[0]
@@ -1176,6 +1147,7 @@ void set_pin_mode_stepper() {
 }
 
 void stepper_move_to() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   // motor_id = command_buffer[0]
@@ -1198,6 +1170,7 @@ void stepper_move_to() {
 }
 
 void stepper_move() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   // motor_id = command_buffer[0]
@@ -1221,6 +1194,7 @@ void stepper_move() {
 }
 
 void stepper_run() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
   stepper_run_modes[command_buffer[0]] = STEPPER_RUN;
 #endif
@@ -1228,6 +1202,7 @@ void stepper_run() {
 
 void stepper_run_speed() {
   // motor_id = command_buffer[0]
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   stepper_run_modes[command_buffer[0]] = STEPPER_RUN_SPEED;
@@ -1235,6 +1210,7 @@ void stepper_run_speed() {
 }
 
 void stepper_set_max_speed() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   // motor_id = command_buffer[0]
@@ -1247,6 +1223,7 @@ void stepper_set_max_speed() {
 }
 
 void stepper_set_acceleration() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   // motor_id = command_buffer[0]
@@ -1263,6 +1240,7 @@ void stepper_set_speed() {
   // motor_id = command_buffer[0]
   // speed_msb = command_buffer[1]
   // speed_lsb = command_buffer[2]
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
 
   float speed = (float) ((command_buffer[1] << 8) + command_buffer[2]);
@@ -1271,6 +1249,7 @@ void stepper_set_speed() {
 }
 
 void stepper_get_distance_to_go() {
+  //#if !defined (__AVR_ATmega328P__)
 #ifdef STEPPERS_ENABLED
   // motor_id = command_buffer[0]
 
@@ -1289,8 +1268,7 @@ void stepper_get_distance_to_go() {
   report_message[6] = (byte) ((dtg & 0x000000FF));
 
   // motor_id = command_buffer[0]
-  pTxCharacteristic->setValue(report_message, 7);
-  pTxCharacteristic->notify();
+  client.write(report_message, 7);
 #endif
 }
 
@@ -1314,8 +1292,7 @@ void stepper_get_target_position() {
   report_message[6] = (byte) ((target & 0x000000FF));
 
   // motor_id = command_buffer[0]
-  pTxCharacteristic->setValue(report_message, 7);
-  pTxCharacteristic->notify();
+  client.write(report_message, 7);
 #endif
 }
 
@@ -1339,8 +1316,7 @@ void stepper_get_current_position() {
   report_message[6] = (byte) ((position & 0x000000FF));
 
   // motor_id = command_buffer[0]
-  pTxCharacteristic->setValue(report_message, 7);
-  pTxCharacteristic->notify();
+  client.write(report_message, 7);
 #endif
 }
 
@@ -1451,8 +1427,7 @@ void stepper_is_running() {
 
   report_message[2]  = steppers[command_buffer[0]]->isRunning();
 
-  pTxCharacteristic->setValue(report_message, 3);
-  pTxCharacteristic->notify();
+  client.write(report_message, 3);
 #endif
 
 }
@@ -1464,13 +1439,105 @@ void stop_all_reports()
 {
   stop_reports = true;
   delay(20);
+  client.flush();
+  reset_command_input();
 }
 
 // enable all reports to be generated
 void enable_all_reports()
 {
+  client.flush();
   stop_reports = false;
   delay(20);
+  reset_command_input();
+}
+
+// retrieve the next command from the client
+void get_next_command()
+{
+
+  // if we have not received all packets in 1 second, then reset the packet length and command
+  if(delay_done(command_timeout, &last_command_time)) {
+    reset_command_input();
+  }
+
+  // if we already have received a packet, try to get the data, then return
+  if (packet_length > 1) {
+    get_command_buffer();
+    return;
+  }
+
+  // if there is no command waiting, then return
+  if (client.available() < 2)
+  {
+    return;
+  }
+
+  // we have received a command, so reset the last command time
+  last_command_time = millis();
+
+  // get the packet length
+  packet_length = (byte)client.read();
+
+  // get the command byte
+  command = (byte)client.read();
+
+  // uncomment the next line to see the packet length and command
+  //send_debug_info(packet_length, command);
+
+  // if the packet length is 1, then we have received the entire packet
+  if (packet_length <= 1) {
+    dispatch_command();
+  }
+ 
+}
+
+// get the data for the command from the serial link
+void get_command_buffer()
+{
+  // check to see if we have received the entire packet
+  if (client.available() < packet_length - 1)
+  {
+    return;
+  }
+
+  // we have received a command, so reset the last command time
+  last_command_time = millis();
+
+  // read the rest of the packet
+  for (uint8_t i = 0; i < packet_length - 1; i++) {
+    command_buffer[i] = (byte)client.read();
+  }
+
+  // dispatch the command
+  dispatch_command();
+}
+
+// dispatch the command
+void dispatch_command()
+{
+  // return if we don't have a valid command
+   if (command > sizeof(command_table)) {
+    return;
+  }
+
+  // get the command entry
+  command_descriptor command_entry = command_table[command];
+
+  // reset the packet length and command
+  reset_command_input();
+
+  // execute the command
+  command_entry.command_func();
+  
+  // clear the command buffer
+  memset(command_buffer, 0, sizeof(command_buffer));
+}
+
+// reset the packet length and command
+void reset_command_input() {
+  packet_length = 0;
+  command = 255;
 }
 
 // reset the internal data structures to a known state
@@ -1590,8 +1657,7 @@ void scan_digital_inputs()
     the_digital_pins[i].last_value = value;
     report_message[2] = (byte)i;
     report_message[3] = value;
-    pTxCharacteristic->setValue(report_message, 4);
-    pTxCharacteristic->notify();
+    client.write(report_message, 4);
 
   }
 }
@@ -1655,8 +1721,7 @@ void scan_analog_inputs()
     report_message[2] = (byte)i;
     report_message[3] = highByte(value); // get high order byte
     report_message[4] = lowByte(value);
-    pTxCharacteristic->setValue(report_message, 5);
-    pTxCharacteristic->notify();
+    client.write(report_message, 5);
     delay(1);
 
   }
@@ -1694,8 +1759,7 @@ void scan_sonars()
   byte report_message[5] = {4, SONAR_DISTANCE, sonars[last_sonar_visited].trigger_pin,
                             (byte)(distance >> 8), (byte)(distance & 0xff)
                            };
-  pTxCharacteristic->setValue(report_message, 5);
-  pTxCharacteristic->notify();
+  client.write(report_message, 5);
   
   last_sonar_visited++;
   if (last_sonar_visited != sonars_index)
@@ -1767,8 +1831,7 @@ void scan_dhts()
 
     // if rv is not zero, this is an error report
     if (rv) {
-      pTxCharacteristic->setValue(report_message, 11);
-      pTxCharacteristic->notify();
+      client.write(report_message, 11);
       return;
     }
     
@@ -1802,8 +1865,7 @@ void scan_dhts()
 
     report_message[9] = (uint8_t)j;
     report_message[10] = (uint8_t)(f * 100);
-    pTxCharacteristic->setValue(report_message, 11);
-    pTxCharacteristic->notify();
+    client.write(report_message, 11);
   }
 #endif
 }
@@ -1849,8 +1911,7 @@ void run_steppers() {
 #ifdef STEPPERS_ENABLED
 void stepper_send_complete_report(byte stepper_number) {
   byte report_message[3] = {2, STEPPER_RUN_COMPLETE_REPORT, (byte)stepper_number};
-  pTxCharacteristic->setValue(report_message, 3);
-  pTxCharacteristic->notify();
+  client.write(report_message, 3);
   stepper_run_modes[stepper_number] = STEPPER_STOP;
 }
 #endif
@@ -1904,83 +1965,105 @@ void setup()
 
   Serial.begin(115200);
   delay(1000);
+  
+  // Seting up the hostname
+  String hostName = "Firmetix4ESP-WIFI-" + (String) ARDUINO_ID;
+  WiFi.hostname(hostName.c_str());
+  Serial.println("Hostname: " + hostName);
 
-  // Create the BLE Device
-  String deviceName = "Firmetix4ESP_BLE_" + (String) ARDUINO_ID;
-  BLEDevice::init(deviceName.c_str());
-  Serial.println("Device name :" + deviceName);
-  Serial.print("Device mac address : ");
-  BLEAddress address = BLEDevice::getAddress();
-  Serial.println(address.toString().c_str());
- 
+  #ifdef ESP32
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  #endif
 
-  // Create the BLE Server
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+  WiFi.begin(ssid, password);
 
-  // Create the BLE Service
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pinMode(LED_BUILTIN, OUTPUT);
 
-  // Create a BLE Characteristic
-  pTxCharacteristic = pService->createCharacteristic(
-                        CHARACTERISTIC_UUID_TX,
-                        BLECharacteristic::PROPERTY_NOTIFY
-                      );
+  digitalWrite(LED_BUILTIN, HIGH);
 
-  pTxCharacteristic->addDescriptor(new BLE2902());
+  Serial.println("\nAllow 20 seconds for connection to complete");
 
-  BLECharacteristic * pRxCharacteristic = pService->createCharacteristic(
-      CHARACTERISTIC_UUID_RX,
-      BLECharacteristic::PROPERTY_WRITE
-                                          );
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
 
-  pRxCharacteristic->setCallbacks(new MyCallbacks());
+  Serial.println();
 
-  // Start the service
-  pService->start();
+  // Turn off the LED
+  digitalWrite(LED_BUILTIN, LOW);
 
-  // Start advertising
-  pServer->getAdvertising()->start();
-  Serial.println("Waiting a client connection to notify...");
+  Serial.print("Connected to ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  Serial.print("  IP Port: ");
+  Serial.println(PORT);
+
+  Serial.println("Seting up mDNS");
+  const char* deviceName = hostName.c_str();
+  // start the mDNS responder
+  if (!MDNS.begin(deviceName)) {
+    Serial.println("Error setting up MDNS responder!");
+  }
+  MDNS.addService("firmetix", "tcp", PORT);
+  Serial.print("mDNS responder started, the adress is : ");
+  Serial.println((String) deviceName + ".local");
+
+  // start the server
+  wifiServer.begin();
 
 }
 
-void loop() {
-
-  // disconnecting
-  if (!deviceConnected && oldDeviceConnected) {
-    delay(500); // give the bluetooth stack the chance to get things ready
-    pServer->startAdvertising(); // restart advertising
-    Serial.println("start advertising");
-    oldDeviceConnected = deviceConnected;
-    return;
-  }
-
-  if (!deviceConnected) {
-    return;
-  }
-
-  // connecting
-  if (!oldDeviceConnected) {
-    oldDeviceConnected = deviceConnected;
-  }
-  
-  // Do not report if true
-  if (stop_reports) return;
-
-  scan_digital_inputs();
-  scan_analog_inputs();
-
-#ifdef SONAR_ENABLED
-  if(sonar_reporting_enabled ){
-    scan_sonars();
-  }
+void loop()
+{
+#ifdef ESP8266
+  client = wifiServer.accept();
+#else
+  client = wifiServer.available();
 #endif
 
-#ifdef DHT_ENABLED
-  scan_dhts();
-#endif
-#ifdef STEPPERS_ENABLED
-  run_steppers();
-#endif
+  if (!client) {
+    client.stop();
+    Serial.println("Client disconnected");
+    #ifdef ESP8266
+      ESP.restart();
+    #endif
+  }
+
+  Serial.print("Client connected to address: ");
+  Serial.println(client.remoteIP());
+
+  while (client.connected())
+  {
+    // keep processing incoming commands
+    get_next_command();
+
+    if (stop_reports) continue;
+
+    scan_digital_inputs();
+    scan_analog_inputs();
+
+    #ifdef SONAR_ENABLED
+      if(sonar_reporting_enabled ){
+        scan_sonars();
+      }
+    #endif
+
+    #ifdef DHT_ENABLED
+      scan_dhts();
+    #endif
+    #ifdef STEPPERS_ENABLED
+      run_steppers();
+    #endif
+    }
+
+  client.stop();
+  Serial.println("Client disconnected");
+  #ifdef ESP8266
+    ESP.restart();
+  #endif
+
 }
