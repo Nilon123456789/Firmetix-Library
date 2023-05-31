@@ -145,3 +145,5 @@ dmypy.json
 .vscode/c_cpp_properties.json
 >>>>>>> Stashed changes
 .vscode/arduino.json
+
+cmake-build-debug/CMakeFiles/clion-Debug-log.txt

@@ -8,7 +8,7 @@ public:
     // firmware version - update this when bumping the version
     #define FIRMWARE_MAJOR 7
     #define FIRMWARE_MINOR 1
-    #define FIRMWARE_PATCH 0
+    #define FIRMWARE_PATCH 1
 
     #ifndef LED_BUILTIN
     #define LED_BUILTIN 2
