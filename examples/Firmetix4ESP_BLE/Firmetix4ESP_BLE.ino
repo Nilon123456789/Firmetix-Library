@@ -590,11 +590,14 @@ void set_pin_mode()
 
   switch (mode)
   {
-    case INPUT:
-    case INPUT_PULLUP:
+    case AT_INPUT:
       the_digital_pins[pin].pin_mode = mode;
       the_digital_pins[pin].reporting_enabled = command_buffer[2];
-      pinMode(pin, mode);
+      pinMode(pin, INPUT);
+    case AT_INPUT_PULLUP:
+      the_digital_pins[pin].pin_mode = mode;
+      the_digital_pins[pin].reporting_enabled = command_buffer[2];
+      pinMode(pin, INPUT_PULLUP);
       break;
     case OUTPUT:
       the_digital_pins[pin].pin_mode = mode;

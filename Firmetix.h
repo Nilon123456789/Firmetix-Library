@@ -138,10 +138,10 @@ public:
 
     // Pin mode definitions
 
-    // INPUT defined in Arduino.h = 0
-    // OUTPUT defined in Arduino.h = 1
-    // INPUT_PULLUP defined in Arduino.h = 2
     // The following are defined for arduino_firmetix (AT)
+    #define AT_INPUT 0
+    #define AT_OUTPUT 1
+    #define AT_INPUT_PULLUP 2
     #define AT_ANALOG 3
     #define AT_ANALOG_OUTPUT 7
     #define AT_MODE_NOT_SET 255
