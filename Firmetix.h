@@ -111,8 +111,8 @@ public:
     #define STEPPER_RUN_COMPLETE_REPORT 19
     #define FEATURES 20
     #define NOT_IMPLEMENTED 21
+    #define MAX_PIN_REPORT GET_MAX_PINS
     #define DEBUG_PRINT 99
-    #define MAX_PIN_REPORT 57
 
     // Input pin reporting control sub commands (modify_reporting)
     #define REPORTING_DISABLE_ALL 0
