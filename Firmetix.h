@@ -79,9 +79,9 @@ public:
     #define GET_FEATURES 54
     #define SONAR_DISABLE 55
     #define SONAR_ENABLE 56
-    #define TONE = 70
-    #define NO_TONE = 71
-    #define GET_MAX_PINS = 72
+    #define TONE = 57
+    #define NO_TONE = 58
+    #define GET_MAX_PINS = 59
 
     // maximum length of a command in bytes
     #define MAX_COMMAND_LENGTH 30
@@ -90,7 +90,7 @@ public:
     /*                 Reporting Defines and Support                    */
     /* %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%*/
 
-    // Reports sent to the client
+    // Reports sent to the client (THE NUMBER MUST BE IN ORDER AND WITHOUT ANY SKUP)
 
     #define DIGITAL_REPORT DIGITAL_WRITE
     #define ANALOG_REPORT ANALOG_WRITE
@@ -111,7 +111,7 @@ public:
     #define STEPPER_RUN_COMPLETE_REPORT 19
     #define FEATURES 20
     #define NOT_IMPLEMENTED 21
-    #define MAX_PIN_REPORT GET_MAX_PINS
+    #define MAX_PIN_REPORT 22
     #define DEBUG_PRINT 99
 
     // Input pin reporting control sub commands (modify_reporting)
